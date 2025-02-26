@@ -1,4 +1,3 @@
-// app/api/simple-proxy/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { JSDOM } from 'jsdom';
 
@@ -106,18 +105,6 @@ export async function GET(request: NextRequest) {
 // Support POST, PUT, etc. methods
 export async function POST(request: NextRequest) {
   return handleRequest(request, 'POST');
-}
-
-export async function PUT(request: NextRequest) {
-  return handleRequest(request, 'PUT');
-}
-
-export async function DELETE(request: NextRequest) {
-  return handleRequest(request, 'DELETE');
-}
-
-export async function PATCH(request: NextRequest) {
-  return handleRequest(request, 'PATCH');
 }
 
 async function handleRequest(request: NextRequest, method: string) {
