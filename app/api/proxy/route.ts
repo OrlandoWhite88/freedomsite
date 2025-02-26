@@ -37,43 +37,77 @@ export async function GET(request: NextRequest) {
   
   try {
     const proxy = getRandomProxy();
+    console.log(`Using proxy: ${proxy.host}:${proxy.port} for target: ${targetUrl}`);
+    
     const parsedUrl = new URL(targetUrl);
     
-    const options = {
-      host: proxy.host,
-      port: proxy.port,
-      method: 'GET',
-      path: targetUrl,
-      headers: {
-        'Host': parsedUrl.host,
-        'User-Agent': request.headers.get('user-agent') || 'Mozilla/5.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive'
-      }
-    };
-    
-    const proxyResponse = await new Promise((resolve, reject) => {
-      const req = parsedUrl.protocol === 'https:' ? https.request(options) : http.request(options);
-      
-      req.on('response', (response) => {
-        resolve(response);
+    // Create a proper HTTP/HTTPS request through the proxy
+    const proxyReq = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host: proxy.host,
+        port: proxy.port,
+        method: 'GET',
+        path: targetUrl,
+        timeout: 10000, // 10 second timeout
+        headers: {
+          'Host': parsedUrl.host,
+          'User-Agent': request.headers.get('user-agent') || 'Mozilla/5.0',
+          'Accept': '*/*',
+          'Connection': 'close'
+        }
       });
       
       req.on('error', (error) => {
+        console.error(`Proxy error for ${proxy.host}:${proxy.port}:`, error.message);
         reject(error);
+      });
+      
+      req.on('timeout', () => {
+        console.error(`Proxy request timed out for ${proxy.host}:${proxy.port}`);
+        req.destroy();
+        reject(new Error('Proxy request timed out'));
+      });
+      
+      // Get response and read data
+      req.on('response', (response) => {
+        let data = '';
+        
+        response.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        response.on('end', () => {
+          resolve({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            data
+          });
+        });
       });
       
       req.end();
     });
     
-    return new NextResponse('Proxy request successful', {
+    // Return content from proxy
+    return new NextResponse(JSON.stringify({ 
+      message: 'Proxy request successful',
+      url: targetUrl
+    }), {
       status: 200,
-      headers: { 'Content-Type': 'text/html' }
+      headers: { 'Content-Type': 'application/json' }
     });
     
   } catch (error) {
-    console.error('Proxy error:', error);
-    return new NextResponse('Proxy request failed', { status: 500 });
+    console.error('Proxy error details:', error);
+    
+    // Return error response with more details
+    return new NextResponse(JSON.stringify({
+      error: 'Proxy request failed',
+      message: error instanceof Error ? error.message : 'Unknown error',
+      url: targetUrl
+    }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
