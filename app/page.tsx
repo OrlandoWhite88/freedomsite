@@ -15,7 +15,7 @@ export default function Home() {
         <IframeView service={currentService} />
       ) : (
         <main className="container mx-auto px-4 md:px-8 pt-16">
-          <h1 className="text-4xl font-bold mb-8 text-center text-blue-500">Freedom Dashboard</h1>
+          <h1 className="text-4xl font-bold mb-8 text-center text-blue-500">Freedom Dashboard88</h1>
           <WidgetGrid setCurrentService={setCurrentService} />
         </main>
       )}
