@@ -36,34 +36,36 @@ function rewriteContent(content: string, targetUrl: string, contentType: string)
     // Fast string replacement for HTML attributes
     return content
       // Replace src attributes
-      .replace(/(\ssrc=["'])((?!data:|blob:|javascript:).+?)(["'])/gi, (match, prefix, url, suffix) => {
+      .replace(/(\ssrc=["'])((?!data:|blob:|javascript:).+?)(["'])/gi, (match: string, prefix: string, url: string, suffix: string) => {
         return `${prefix}${toProxyUrl(url)}${suffix}`;
       })
       // Replace href attributes
-      .replace(/(\shref=["'])((?!data:|blob:|javascript:|#).+?)(["'])/gi, (match, prefix, url, suffix) => {
+      .replace(/(\shref=["'])((?!data:|blob:|javascript:|#).+?)(["'])/gi, (match: string, prefix: string, url: string, suffix: string) => {
         return `${prefix}${toProxyUrl(url)}${suffix}`;
       })
       // Replace background images in style attributes
-      .replace(/(\sstyle=["'].*?url\(["']?)((?!data:|blob:).+?)(["']?\).*?["'])/gi, (match, prefix, url, suffix) => {
+      .replace(/(\sstyle=["'].*?url\(["']?)((?!data:|blob:).+?)(["']?\).*?["'])/gi, (match: string, prefix: string, url: string, suffix: string) => {
         return `${prefix}${toProxyUrl(url)}${suffix}`;
       })
       // Replace srcset attributes
-      .replace(/(\ssrcset=["'])(.*?)(["'])/gi, (match, prefix, srcset, suffix) => {
+      .replace(/(\ssrcset=["'])(.*?)(["'])/gi, (match: string, prefix: string, srcset: string, suffix: string) => {
         // Split srcset into individual entries
-        const newSrcset = srcset.split(',').map(part => {
-          const [url, descriptor] = part.trim().split(/\s+/);
+        const newSrcset = srcset.split(',').map((part: string) => {
+          const parts = part.trim().split(/\s+/);
+          const url = parts[0];
+          const descriptor = parts.slice(1).join(' ');
           if (!url) return part;
           return `${toProxyUrl(url)} ${descriptor || ''}`.trim();
         }).join(', ');
         return `${prefix}${newSrcset}${suffix}`;
       })
       // Replace CSS @import urls
-      .replace(/(@import\s+["'])((?!data:|blob:).+?)(["'])/gi, (match, prefix, url, suffix) => {
+      .replace(/(@import\s+["'])((?!data:|blob:).+?)(["'])/gi, (match: string, prefix: string, url: string, suffix: string) => {
         return `${prefix}${toProxyUrl(url)}${suffix}`;
       })
       // Replace CSS url() functions in style tags
-      .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/gi, (match, startTag, cssContent, endTag) => {
-        const processedCss = cssContent.replace(/url\(["']?((?!data:|blob:).+?)["']?\)/gi, (match, url) => {
+      .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/gi, (match: string, startTag: string, cssContent: string, endTag: string) => {
+        const processedCss = cssContent.replace(/url\(["']?((?!data:|blob:).+?)["']?\)/gi, (match: string, url: string) => {
           return `url("${toProxyUrl(url)}")`;
         });
         return `${startTag}${processedCss}${endTag}`;
@@ -112,7 +114,7 @@ function rewriteContent(content: string, targetUrl: string, contentType: string)
   
   // For CSS content
   if (contentType.includes('text/css')) {
-    return content.replace(/url\(["']?((?!data:|blob:).+?)["']?\)/gi, (match, url) => {
+    return content.replace(/url\(["']?((?!data:|blob:).+?)["']?\)/gi, (match: string, url: string) => {
       if (!url) return match;
       
       let absoluteUrl = url;
