@@ -10,7 +10,7 @@ interface IframeViewProps {
 const serviceUrls: Record<string, string> = {
   "Netflix": "https://netflix.com",
   "YouTube": "https://youtube.com",
-  "Poki": "https://www.york.ac.uk/teaching/cws/wws/webpage1.html",
+  "Poki": "https://www.paulgraham.com",
   // Add more services as needed
 }
 
