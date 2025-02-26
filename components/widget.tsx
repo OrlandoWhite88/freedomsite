@@ -51,9 +51,12 @@ export function Widget({ title, logo, description, color, onClick }: WidgetProps
         <div className="relative p-4 text-white z-10 bg-gradient-to-t from-black/80 to-transparent">
           <h3 className="text-2xl font-bold mb-1">{title}</h3>
           <p className="text-sm opacity-80">{widgetDescription}</p>
-          <p className="text-xs mt-2 opacity-0 group-hover:opacity-100 transition-all duration-300 bg-white/20 inline-block px-2 py-1 rounded">
-            Click to open
-          </p>
+          <div className="mt-2 flex items-center">
+            <span className="text-xs opacity-0 group-hover:opacity-100 transition-all duration-300 bg-white/20 inline-block px-2 py-1 rounded mr-2">
+              Direct proxy
+            </span>
+            <div className="w-2 h-2 bg-green-400 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-300"></div>
+          </div>
         </div>
       </CardContent>
     </Card>
