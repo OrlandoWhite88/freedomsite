@@ -19,79 +19,72 @@ export function IframeView({ service }: IframeViewProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const [retryCount, setRetryCount] = useState(0)
-  const maxRetries = 3
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
     const updateHeight = () => {
+      // Subtract header height (48px) from viewport height
       setHeight(`${window.innerHeight - 48}px`)
     }
 
+    // Set initial height
     updateHeight()
+
+    // Update height on window resize
     window.addEventListener("resize", updateHeight)
-    
+
     // Reset states when service changes
     setLoading(true)
     setError(null)
-    setRetryCount(0)
     
-    return () => window.removeEventListener("resize", updateHeight)
-  }, [service])
+    // Set a timeout to detect long-loading pages
+    timeoutRef.current = setTimeout(() => {
+      if (loading) {
+        setLoading(false)
+        setError("This site is taking longer than expected to load. It may be blocked or very slow.")
+      }
+    }, 20000) // 20 second timeout
+    
+    return () => {
+      window.removeEventListener("resize", updateHeight)
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+    }
+  }, [service, loading])
 
   // Get the target URL for the selected service
   const targetUrl = serviceUrls[service] || "google.com"
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}&debug=true`
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`
 
-  // Handle iframe load/error events
+  // Handle iframe load event
   const handleLoad = () => {
     setLoading(false)
-    setError(null)
     
-    // Check if the iframe content loaded correctly
-    try {
-      if (iframeRef.current) {
-        // This will throw an error if cross-origin issues exist
-        const iframeDoc = iframeRef.current.contentDocument || iframeRef.current.contentWindow?.document
-        
-        // If we can access the document but it contains an error message
-        if (iframeDoc && iframeDoc.title.includes("Error")) {
-          setError("The content couldn't be displayed. It may be protected.")
-          
-          // Try a different approach if we haven't exceeded max retries
-          if (retryCount < maxRetries) {
-            setRetryCount(prevCount => prevCount + 1)
-            // Use a different proxy approach on retry
-            iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(targetUrl)}&mode=alternative&retry=${retryCount + 1}`
-          }
-        }
-      }
-    } catch (e) {
-      // Cross-origin error expected - this is normal if iframe loaded successfully
-      setLoading(false)
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
     }
   }
 
+  // Handle iframe error
   const handleError = () => {
     setLoading(false)
     setError("Failed to load content. The site may be blocking our requests.")
     
-    // Try a different approach if we haven't exceeded max retries
-    if (retryCount < maxRetries) {
-      setRetryCount(prevCount => prevCount + 1)
-      if (iframeRef.current) {
-        iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(targetUrl)}&mode=alternative&retry=${retryCount + 1}`
-      }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
     }
   }
 
-  // Handle retry button click
+  // Handle retry
   const handleRetry = () => {
     setLoading(true)
     setError(null)
-    setRetryCount(prevCount => prevCount + 1)
     
     if (iframeRef.current) {
-      iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(targetUrl)}&retry=${retryCount + 1}`
+      // Add a cache buster to force reload
+      const cacheBuster = `&cb=${Date.now()}`
+      iframeRef.current.src = proxyUrl + cacheBuster
     }
   }
 
@@ -137,7 +130,7 @@ export function IframeView({ service }: IframeViewProps) {
         className="w-full h-full border-none"
         allowFullScreen
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
+        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
         onLoad={handleLoad}
         onError={handleError}
       />

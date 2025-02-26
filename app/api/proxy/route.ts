@@ -1,14 +1,143 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { URL } from 'url';
-import { JSDOM } from 'jsdom';  // You'll need to install this with: npm install jsdom
 
-// Debug mode to help diagnose issues
-const DEBUG = true;
+// Set to false for production
+const DEBUG = false;
+
+// Performance-optimized URL rewriter without using JSDOM
+function rewriteContent(content: string, targetUrl: string, contentType: string): string {
+  const parsedUrl = new URL(targetUrl);
+  const baseUrl = `${parsedUrl.protocol}//${parsedUrl.hostname}`;
+  const basePath = parsedUrl.pathname.substring(0, parsedUrl.pathname.lastIndexOf('/') || 0);
+  
+  // For HTML content
+  if (contentType.includes('text/html')) {
+    // Function to convert relative URLs to absolute
+    const toProxyUrl = (url: string): string => {
+      if (!url || url.startsWith('javascript:') || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('#')) {
+        return url;
+      }
+      
+      let absoluteUrl = url;
+      
+      // Convert to absolute URL
+      if (url.startsWith('//')) {
+        absoluteUrl = `https:${url}`;
+      } else if (url.startsWith('/')) {
+        absoluteUrl = `${baseUrl}${url}`;
+      } else if (!url.match(/^https?:\/\//i)) {
+        absoluteUrl = `${baseUrl}${basePath}/${url}`;
+      }
+      
+      // Return proxied URL
+      return `/api/proxy?url=${encodeURIComponent(absoluteUrl)}`;
+    };
+    
+    // Fast string replacement for HTML attributes
+    return content
+      // Replace src attributes
+      .replace(/(\ssrc=["'])((?!data:|blob:|javascript:).+?)(["'])/gi, (match, prefix, url, suffix) => {
+        return `${prefix}${toProxyUrl(url)}${suffix}`;
+      })
+      // Replace href attributes
+      .replace(/(\shref=["'])((?!data:|blob:|javascript:|#).+?)(["'])/gi, (match, prefix, url, suffix) => {
+        return `${prefix}${toProxyUrl(url)}${suffix}`;
+      })
+      // Replace background images in style attributes
+      .replace(/(\sstyle=["'].*?url\(["']?)((?!data:|blob:).+?)(["']?\).*?["'])/gi, (match, prefix, url, suffix) => {
+        return `${prefix}${toProxyUrl(url)}${suffix}`;
+      })
+      // Replace srcset attributes
+      .replace(/(\ssrcset=["'])(.*?)(["'])/gi, (match, prefix, srcset, suffix) => {
+        // Split srcset into individual entries
+        const newSrcset = srcset.split(',').map(part => {
+          const [url, descriptor] = part.trim().split(/\s+/);
+          if (!url) return part;
+          return `${toProxyUrl(url)} ${descriptor || ''}`.trim();
+        }).join(', ');
+        return `${prefix}${newSrcset}${suffix}`;
+      })
+      // Replace CSS @import urls
+      .replace(/(@import\s+["'])((?!data:|blob:).+?)(["'])/gi, (match, prefix, url, suffix) => {
+        return `${prefix}${toProxyUrl(url)}${suffix}`;
+      })
+      // Replace CSS url() functions in style tags
+      .replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/gi, (match, startTag, cssContent, endTag) => {
+        const processedCss = cssContent.replace(/url\(["']?((?!data:|blob:).+?)["']?\)/gi, (match, url) => {
+          return `url("${toProxyUrl(url)}")`;
+        });
+        return `${startTag}${processedCss}${endTag}`;
+      })
+      // Add anti-frame-busting script
+      .replace('</head>', `
+        <script>
+          // Prevent frame detection
+          try {
+            // Override window.top, parent, self and frameElement
+            Object.defineProperty(window, 'top', { get: function() { return window; } });
+            Object.defineProperty(window, 'parent', { get: function() { return window; } });
+            Object.defineProperty(window, 'self', { get: function() { return window; } });
+            Object.defineProperty(window, 'frameElement', { get: function() { return null; } });
+            
+            // Override common frame-busting functions
+            window.open = function(url, ...args) {
+              if (url && typeof url === 'string' && !url.startsWith('javascript:')) {
+                location.href = '/api/proxy?url=' + encodeURIComponent(url);
+                return window;
+              }
+              return window;
+            };
+            
+            // Override location methods
+            const originalLocation = window.location;
+            Object.defineProperty(window, 'location', {
+              get: function() { return originalLocation; },
+              set: function(url) {
+                if (typeof url === 'string' && !url.startsWith('javascript:')) {
+                  originalLocation.href = '/api/proxy?url=' + encodeURIComponent(url);
+                }
+                return url;
+              }
+            });
+            
+            // Override document.domain
+            Object.defineProperty(document, 'domain', {
+              get: function() { return '${parsedUrl.hostname}'; },
+              set: function() { return '${parsedUrl.hostname}'; }
+            });
+          } catch(e) { console.warn('Frame protection override failed:', e); }
+        </script>
+      </head>`);
+  }
+  
+  // For CSS content
+  if (contentType.includes('text/css')) {
+    return content.replace(/url\(["']?((?!data:|blob:).+?)["']?\)/gi, (match, url) => {
+      if (!url) return match;
+      
+      let absoluteUrl = url;
+      
+      // Convert to absolute URL
+      if (url.startsWith('//')) {
+        absoluteUrl = `https:${url}`;
+      } else if (url.startsWith('/')) {
+        absoluteUrl = `${baseUrl}${url}`;
+      } else if (!url.match(/^https?:\/\//i)) {
+        absoluteUrl = `${baseUrl}${basePath}/${url}`;
+      }
+      
+      return `url("/api/proxy?url=${encodeURIComponent(absoluteUrl)}")`;
+    });
+  }
+  
+  // For JavaScript content, we could add script modifications here if needed
+  
+  return content;
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   let targetUrl = searchParams.get('url');
-  const debug = searchParams.get('debug') === 'true' || DEBUG;
   
   if (!targetUrl) {
     return NextResponse.redirect('https://www.google.com');
@@ -19,197 +148,78 @@ export async function GET(request: NextRequest) {
   }
   
   try {
-    const parsedUrl = new URL(targetUrl);
-    
-    // Log request details if debugging
-    if (debug) {
-      console.log(`Proxy request: ${targetUrl}`);
-      console.log(`Headers: ${JSON.stringify(Object.fromEntries(request.headers))}`);
-    }
+    // For performance, reduce timeout to 15s
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     
     // Custom headers to mimic a real browser
     const headers = new Headers({
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.5',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Referer': `https://${parsedUrl.hostname}`,
+      'Referer': new URL(targetUrl).origin,
       'Connection': 'keep-alive',
       'Upgrade-Insecure-Requests': '1',
       'Sec-Fetch-Dest': 'document',
       'Sec-Fetch-Mode': 'navigate',
       'Sec-Fetch-Site': 'cross-site',
-      'Cache-Control': 'max-age=0',
-      'TE': 'trailers'
+      'Cache-Control': 'no-cache'
     });
     
-    // Attempt to fetch the target URL using fetch API with a 30s timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    
+    // Perform the fetch request
     const fetchResponse = await fetch(targetUrl, {
       method: 'GET',
       headers,
       redirect: 'follow',
-      signal: controller.signal
+      signal: controller.signal,
+      cache: 'no-store'
     });
     
     clearTimeout(timeoutId);
     
-    // Log response details if debugging
-    if (debug) {
-      console.log(`Response status: ${fetchResponse.status}`);
-      console.log(`Response headers: ${JSON.stringify(Object.fromEntries(fetchResponse.headers))}`);
-    }
-    
     // Get content type
     const contentType = fetchResponse.headers.get('content-type') || '';
     
-    // Handle different content types
-    if (contentType.includes('text/html')) {
-      // Get HTML content
-      const html = await fetchResponse.text();
-      
-      if (debug) {
-        console.log(`HTML content length: ${html.length}`);
+    // Create response headers (strip security headers)
+    const responseHeaders = new Headers();
+    fetchResponse.headers.forEach((value, key) => {
+      // Skip security headers that would prevent embedding
+      if (!['x-frame-options', 'content-security-policy', 'frame-options'].includes(key.toLowerCase())) {
+        responseHeaders.set(key, value);
       }
+    });
+    
+    // Always set content type
+    responseHeaders.set('Content-Type', contentType);
+    responseHeaders.set('X-Proxy-Source', targetUrl);
+    
+    // Don't cache responses
+    responseHeaders.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    responseHeaders.set('Pragma', 'no-cache');
+    responseHeaders.set('Expires', '0');
+    
+    // For text content types, rewrite URLs
+    if (contentType.includes('text') || contentType.includes('javascript') || contentType.includes('json') || contentType.includes('xml')) {
+      const text = await fetchResponse.text();
+      const processedContent = rewriteContent(text, targetUrl, contentType);
       
-      // Process HTML using JSDOM for more robust handling
-      const dom = new JSDOM(html);
-      const document = dom.window.document;
-      
-      // Remove elements that could block embedding
-      const elementsToRemove = [
-        'script[src*="anti-iframe"]',
-        'script[src*="security"]',
-        'meta[http-equiv="X-Frame-Options"]',
-        'meta[http-equiv="Frame-Options"]',
-        'meta[http-equiv="Content-Security-Policy"]'
-      ];
-      
-      elementsToRemove.forEach(selector => {
-        document.querySelectorAll(selector).forEach(el => el.remove());
-      });
-      
-      // Process all links and resources for proxying
-      const baseElements = document.querySelectorAll('base');
-      const baseHref = baseElements.length > 0 ? baseElements[0].getAttribute('href') : '/';
-      const basePath = baseHref || '/';
-      
-      // Rewrite all assets to go through our proxy
-      // Process all img, script, link, and anchor tags
-      ['img', 'script', 'link', 'a', 'iframe', 'source'].forEach(tagName => {
-        document.querySelectorAll(tagName).forEach(el => {
-          // Handle src attribute
-          if (el.hasAttribute('src')) {
-            const src = el.getAttribute('src');
-            if (src && !src.startsWith('data:') && !src.startsWith('blob:') && !src.startsWith('#')) {
-              try {
-                const absoluteUrl = new URL(src, targetUrl).href;
-                el.setAttribute('src', `/api/proxy?url=${encodeURIComponent(absoluteUrl)}`);
-              } catch (e) {
-                if (debug) console.error(`Failed to process src: ${src}`, e);
-              }
-            }
-          }
-          
-          // Handle href attribute
-          if (el.hasAttribute('href')) {
-            const href = el.getAttribute('href');
-            if (href && !href.startsWith('data:') && !href.startsWith('blob:') && !href.startsWith('#') && !href.startsWith('javascript:')) {
-              try {
-                const absoluteUrl = new URL(href, targetUrl).href;
-                el.setAttribute('href', `/api/proxy?url=${encodeURIComponent(absoluteUrl)}`);
-              } catch (e) {
-                if (debug) console.error(`Failed to process href: ${href}`, e);
-              }
-            }
-          }
-        });
-      });
-      
-      // Process all CSS rules in style tags
-      document.querySelectorAll('style').forEach(styleEl => {
-        const css = styleEl.textContent || '';
-        const processedCss = css.replace(/url\(['"]?(.*?)['"]?\)/g, (match, url) => {
-          if (!url || url.startsWith('data:') || url.startsWith('blob:')) return match;
-          try {
-            const absoluteUrl = new URL(url, targetUrl).href;
-            return `url("/api/proxy?url=${encodeURIComponent(absoluteUrl)}")`;
-          } catch (e) {
-            if (debug) console.error(`Failed to process CSS URL: ${url}`, e);
-            return match;
-          }
-        });
-        styleEl.textContent = processedCss;
-      });
-      
-      // Inject anti-detection script
-      const head = document.querySelector('head');
-      if (head) {
-        const antiDetectionScript = document.createElement('script');
-        antiDetectionScript.textContent = `
-          // Override frame detection
-          try {
-            Object.defineProperty(window, 'self', { get: function() { return window.top; } });
-            Object.defineProperty(window, 'top', { get: function() { return window; } });
-            Object.defineProperty(window, 'parent', { get: function() { return window; } });
-            Object.defineProperty(window, 'frameElement', { get: function() { return null; } });
-            
-            // Override frame-busting checks
-            if (window.location !== window.parent.location) {
-              window.parent.location = window.location;
-            }
-          } catch(e) {
-            console.warn('Frame protection override failed:', e);
-          }
-        `;
-        head.appendChild(antiDetectionScript);
-      }
-      
-      // Add debug info if needed
-      if (debug) {
-        const debugDiv = document.createElement('div');
-        debugDiv.style.position = 'fixed';
-        debugDiv.style.top = '0';
-        debugDiv.style.right = '0';
-        debugDiv.style.background = 'rgba(0,0,0,0.7)';
-        debugDiv.style.color = 'white';
-        debugDiv.style.padding = '10px';
-        debugDiv.style.zIndex = '9999999';
-        debugDiv.textContent = `Proxy Debug: ${new Date().toISOString()} - Source: ${targetUrl}`;
-        document.body.appendChild(debugDiv);
-      }
-      
-      // Get the full HTML
-      const processedHtml = dom.serialize();
-      
-      // Return the processed HTML
-      return new NextResponse(processedHtml, {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'X-Proxy-Status': 'success',
-          'X-Proxy-Source': targetUrl
-        }
+      return new NextResponse(processedContent, {
+        status: fetchResponse.status,
+        headers: responseHeaders
       });
     } else {
-      // For non-HTML content, just forward it directly
+      // For binary content, just pass it through
       const buffer = await fetchResponse.arrayBuffer();
       
       return new NextResponse(buffer, {
         status: fetchResponse.status,
-        headers: {
-          'Content-Type': contentType,
-          'X-Proxy-Status': 'forwarded',
-          'X-Proxy-Source': targetUrl
-        }
+        headers: responseHeaders
       });
     }
   } catch (error) {
-    console.error('Proxy error details:', error);
+    console.error('Proxy error:', error);
     
-    // Return a detailed error page
+    // Simple error page for better performance
     const errorHtml = `
       <!DOCTYPE html>
       <html>
@@ -217,27 +227,20 @@ export async function GET(request: NextRequest) {
           <title>Proxy Error</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; text-align: center; background: #f8f9fa; }
-            .error-container { max-width: 800px; margin: 50px auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 30px; }
+            .error-container { max-width: 600px; margin: 50px auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 30px; }
             h1 { color: #e74c3c; }
-            .details { text-align: left; background: #f1f1f1; padding: 15px; border-radius: 5px; margin-top: 20px; overflow: auto; }
-            .url { font-family: monospace; word-break: break-all; }
+            button { padding: 10px 20px; margin: 10px; border: none; border-radius: 5px; cursor: pointer; }
+            .retry { background: #3498db; color: white; }
+            .back { background: #f1f1f1; color: #333; }
           </style>
         </head>
         <body>
           <div class="error-container">
-            <h1>Proxy Connection Error</h1>
+            <h1>Connection Error</h1>
             <p>Sorry, we couldn't connect to the requested website.</p>
-            <p>URL: <span class="url">${targetUrl}</span></p>
-            
-            <div class="details">
-              <h3>Error Details:</h3>
-              <p>${error instanceof Error ? error.message : 'Unknown error'}</p>
-              ${error instanceof Error && error.stack ? `<pre>${error.stack}</pre>` : ''}
-            </div>
-            
-            <p>Try refreshing the page or selecting a different service.</p>
-            <button onclick="window.location.reload()">Refresh</button>
-            <button onclick="window.history.back()">Go Back</button>
+            <p>Error: ${error instanceof Error ? error.message : 'Network error'}</p>
+            <button class="retry" onclick="window.location.reload()">Try Again</button>
+            <button class="back" onclick="window.history.back()">Go Back</button>
           </div>
         </body>
       </html>
@@ -245,11 +248,7 @@ export async function GET(request: NextRequest) {
     
     return new NextResponse(errorHtml, { 
       status: 500,
-      headers: { 
-        'Content-Type': 'text/html',
-        'X-Proxy-Status': 'error',
-        'X-Proxy-Error': error instanceof Error ? error.message : 'Unknown error'
-      }
+      headers: { 'Content-Type': 'text/html' }
     });
   }
 }
