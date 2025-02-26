@@ -41,7 +41,8 @@ export async function OPTIONS(request: NextRequest) {
 
 // Main proxy handler that supports all methods
 async function handleProxyRequest(request: NextRequest, method: string) {
-  const url = new URL(request.url);
+  // Use the URL from the request object
+  const url = request.nextUrl;
   let targetUrl = url.searchParams.get('url');
   const debug = url.searchParams.get('debug') === 'true' || DEBUG;
   const bypassRewrite = url.searchParams.get('bypass') === 'true';
@@ -94,30 +95,42 @@ async function handleProxyRequest(request: NextRequest, method: string) {
     
     // Handle request body for POST/PUT/PATCH
     if (['POST', 'PUT', 'PATCH'].includes(method)) {
-      // Get content type from the request
-      const contentType = request.headers.get('content-type') || '';
-      
-      // Handle different types of POST data
-      if (contentType.includes('application/json')) {
-        const jsonData = await request.json();
-        fetchOptions.body = JSON.stringify(jsonData);
-      } else if (contentType.includes('application/x-www-form-urlencoded')) {
-        const formData = await request.formData();
-        const params = new URLSearchParams();
+      try {
+        // Get content type from the request
+        const contentType = request.headers.get('content-type') || '';
         
-        // Convert FormData to URLSearchParams
-        for (const [key, value] of formData.entries()) {
-          params.append(key, value.toString());
+        // Handle different types of POST data
+        if (contentType.includes('application/json')) {
+          const jsonData = await request.json();
+          fetchOptions.body = JSON.stringify(jsonData);
+        } else if (contentType.includes('application/x-www-form-urlencoded')) {
+          // Next.js handles this differently than standard fetch
+          const formText = await request.text();
+          fetchOptions.body = formText;
+          
+          // Make sure content-type is preserved
+          headers.set('Content-Type', contentType);
+        } else if (contentType.includes('multipart/form-data')) {
+          try {
+            // For multipart/form-data, we need to get the raw body stream
+            // This is tricky in Next.js - try to use formData if possible
+            const formData = await request.formData();
+            fetchOptions.body = formData;
+          } catch (e) {
+            // If formData fails, try to get the raw body
+            const blob = await request.blob();
+            fetchOptions.body = blob;
+            
+            // Make sure content-type is forwarded with boundary
+            headers.set('Content-Type', contentType);
+          }
+        } else {
+          // For other content types, pass the raw body
+          fetchOptions.body = await request.text();
         }
-        
-        fetchOptions.body = params.toString();
-      } else if (contentType.includes('multipart/form-data')) {
-        // For multipart/form-data, we need to rebuild the FormData
-        const formData = await request.formData();
-        fetchOptions.body = formData;
-      } else {
-        // For other content types, pass the raw body
-        fetchOptions.body = await request.text();
+      } catch (e) {
+        console.error('Error processing request body:', e);
+        // Continue without body if there's an error
       }
     }
     
@@ -147,19 +160,27 @@ async function handleProxyRequest(request: NextRequest, method: string) {
     });
     
     // Forward cookies from the target site to the client
-    const setCookieHeaders = fetchResponse.headers.getAll ? 
-      fetchResponse.headers.getAll('set-cookie') : 
-      fetchResponse.headers.get('set-cookie');
+    // Get all 'set-cookie' headers (next.js doesn't support getAll, so we need a workaround)
+    let cookies: string[] = [];
     
-    if (setCookieHeaders) {
-      if (Array.isArray(setCookieHeaders)) {
-        setCookieHeaders.forEach(cookie => {
-          responseHeaders.append('Set-Cookie', cookie);
-        });
-      } else if (setCookieHeaders) {
-        responseHeaders.set('Set-Cookie', setCookieHeaders);
+    // Use getSetCookie if available in some Next.js environments
+    if ('getSetCookie' in fetchResponse.headers) {
+      // @ts-ignore - getSetCookie exists in some environments but not in the type definition
+      cookies = fetchResponse.headers.getSetCookie() || [];
+    } else {
+      // Fallback: get the single header (may contain multiple cookies in some implementations)
+      const setCookie = fetchResponse.headers.get('set-cookie');
+      if (setCookie) {
+        // Some implementations concatenate multiple Set-Cookie headers with commas or newlines
+        // This is a simplistic approach and may not work for all cookie formats
+        cookies = setCookie.split(/,(?=\s*\w+\s*=)/g);
       }
     }
+    
+    // Add each cookie to the response
+    cookies.forEach(cookie => {
+      responseHeaders.append('Set-Cookie', cookie);
+    });
     
     // Copy content type
     if (contentType) {
