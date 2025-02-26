@@ -6,16 +6,17 @@ interface IframeViewProps {
   service: string
 }
 
-// Direct service URL mapping
+// Service URL mapping
 const serviceUrls: Record<string, string> = {
-  "Netflix": "https://netflix.com",
-  "YouTube": "https://youtube.com",
-  "Poki": "https://www.paulgraham.com",
+  "Netflix": "netflix.com",
+  "YouTube": "youtube.com",
+  "Poki": "poki.com",
   // Add more services as needed
 }
 
 export function IframeView({ service }: IframeViewProps) {
   const [height, setHeight] = useState("100vh")
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const updateHeight = () => {
@@ -28,24 +29,34 @@ export function IframeView({ service }: IframeViewProps) {
 
     // Update height on window resize
     window.addEventListener("resize", updateHeight)
+
+    // Set loading state
+    setLoading(true)
     
     return () => window.removeEventListener("resize", updateHeight)
   }, [service])
 
-  // Get the direct URL for the selected service (default to google if not found)
-  const serviceUrl = serviceUrls[service] || "https://google.com"
+  // Get the target URL for the selected service
+  const targetUrl = serviceUrls[service] || "google.com"
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(targetUrl)}`
 
   return (
     <div className="fixed top-12 left-0 right-0 w-full" style={{ height }}>
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
+          <div className="flex flex-col items-center">
+            <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="mt-4 text-lg">Loading {service}...</p>
+          </div>
+        </div>
+      )}
       <iframe
-        src={serviceUrl}
+        src={proxyUrl}
         title={`${service} viewer`}
         className="w-full h-full border-none"
         allowFullScreen
-        // These attributes help maximize iframe compatibility
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        referrerPolicy="no-referrer"
-        // Remove sandbox to give maximum permissions to the iframe
+        onLoad={() => setLoading(false)}
       />
     </div>
   )
