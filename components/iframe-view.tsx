@@ -25,6 +25,9 @@ export function IframeView({ service }: IframeViewProps) {
   // Keep track of URL history for back/forward navigation
   const [urlHistory, setUrlHistory] = useState<string[]>([])
   const [currentUrlIndex, setCurrentUrlIndex] = useState(-1)
+  
+  // Store the current URL for display
+  const [currentUrl, setCurrentUrl] = useState<string>("")
 
   useEffect(() => {
     const updateHeight = () => {
@@ -41,23 +44,35 @@ export function IframeView({ service }: IframeViewProps) {
     setUrlHistory([])
     setCurrentUrlIndex(-1)
     
+    // Set initial URL
+    const targetUrl = serviceUrls[service] || "google.com"
+    setCurrentUrl(targetUrl)
+    
     return () => window.removeEventListener("resize", updateHeight)
   }, [service])
 
   // Get the target URL for the selected service
   const targetUrl = serviceUrls[service] || "google.com"
   
-  // Determine proxy mode
-  const getProxyUrl = (url: string, bypassRewrite: boolean = false, retry: number = retryCount) => {
+  // Determine proxy mode and parameters
+  const getProxyUrl = (url: string, options: {
+    bypassRewrite?: boolean;
+    retry?: number;
+    debug?: boolean;
+  } = {}) => {
     const params = new URLSearchParams()
     params.set('url', url)
     
-    if (retry > 0) {
-      params.set('retry', retry.toString())
+    if (options.retry && options.retry > 0) {
+      params.set('retry', options.retry.toString())
     }
     
-    if (bypassRewrite) {
+    if (options.bypassRewrite) {
       params.set('bypass', 'true')
+    }
+    
+    if (options.debug) {
+      params.set('debug', 'true')
     }
     
     return `/api/proxy?${params.toString()}`
@@ -70,19 +85,58 @@ export function IframeView({ service }: IframeViewProps) {
     setLoading(false)
     setError(null)
     
-    // Add current URL to history if it's new
-    if (iframeRef.current?.src && 
-       (urlHistory.length === 0 || 
-        urlHistory[currentUrlIndex] !== iframeRef.current.src)) {
-      
-      // If we navigated from history, trim the history
-      const newHistory = currentUrlIndex < urlHistory.length - 1 
-        ? urlHistory.slice(0, currentUrlIndex + 1) 
-        : urlHistory;
+    // Listen for messages from the iframe
+    try {
+      if (iframeRef.current?.contentWindow) {
+        // Try to access the current URL from the iframe
+        const iframeSrc = iframeRef.current.src;
+        const urlParams = new URLSearchParams(iframeSrc.split('?')[1]);
+        const currentProxiedUrl = urlParams.get('url') || targetUrl;
         
-      setUrlHistory([...newHistory, iframeRef.current.src]);
-      setCurrentUrlIndex(newHistory.length);
+        setCurrentUrl(currentProxiedUrl);
+        
+        // Add current URL to history if it's new
+        if (urlHistory.length === 0 || 
+           (currentUrlIndex >= 0 && 
+            urlHistory[currentUrlIndex] !== currentProxiedUrl)) {
+          
+          // If we navigated from history, trim the history
+          const newHistory = currentUrlIndex < urlHistory.length - 1 
+            ? urlHistory.slice(0, currentUrlIndex + 1) 
+            : urlHistory;
+            
+          setUrlHistory([...newHistory, currentProxiedUrl]);
+          setCurrentUrlIndex(newHistory.length);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to update URL information:", e);
     }
+    
+    // Set up a message listener for communication with the iframe
+    const handleIframeMessage = (event: MessageEvent) => {
+      // Verify message source for security
+      if (iframeRef.current && event.source === iframeRef.current.contentWindow) {
+        if (event.data.type === 'navigation' && event.data.url) {
+          // Update current URL
+          setCurrentUrl(event.data.url);
+          
+          // Add to history
+          const newHistory = currentUrlIndex < urlHistory.length - 1 
+            ? urlHistory.slice(0, currentUrlIndex + 1) 
+            : urlHistory;
+            
+          setUrlHistory([...newHistory, event.data.url]);
+          setCurrentUrlIndex(newHistory.length);
+        }
+      }
+    };
+    
+    window.addEventListener('message', handleIframeMessage);
+    
+    return () => {
+      window.removeEventListener('message', handleIframeMessage);
+    };
   }
 
   const handleError = () => {
@@ -98,10 +152,14 @@ export function IframeView({ service }: IframeViewProps) {
       const shouldBypass = newRetryCount % 2 === 1;
       
       if (iframeRef.current) {
-        iframeRef.current.src = getProxyUrl(targetUrl, shouldBypass, newRetryCount);
+        iframeRef.current.src = getProxyUrl(targetUrl, {
+          bypassRewrite: shouldBypass, 
+          retry: newRetryCount,
+          debug: true
+        });
       }
     } else {
-      setError("Failed to load content after multiple attempts. The site may be actively blocking our proxy.");
+      setError("Failed to load content after multiple attempts. The site may be actively blocking our proxy or requires advanced authentication.");
     }
   }
 
@@ -113,7 +171,11 @@ export function IframeView({ service }: IframeViewProps) {
     setRetryCount(newRetryCount)
     
     if (iframeRef.current) {
-      iframeRef.current.src = getProxyUrl(targetUrl, bypassRewrite, newRetryCount);
+      iframeRef.current.src = getProxyUrl(targetUrl, {
+        bypassRewrite,
+        retry: newRetryCount,
+        debug: true
+      });
     }
   }
   
@@ -122,7 +184,10 @@ export function IframeView({ service }: IframeViewProps) {
     if (currentUrlIndex > 0 && iframeRef.current) {
       const newIndex = currentUrlIndex - 1;
       setCurrentUrlIndex(newIndex);
-      iframeRef.current.src = urlHistory[newIndex];
+      const previousUrl = urlHistory[newIndex];
+      setCurrentUrl(previousUrl);
+      iframeRef.current.src = getProxyUrl(previousUrl);
+      setLoading(true);
     }
   }
   
@@ -130,50 +195,95 @@ export function IframeView({ service }: IframeViewProps) {
     if (currentUrlIndex < urlHistory.length - 1 && iframeRef.current) {
       const newIndex = currentUrlIndex + 1;
       setCurrentUrlIndex(newIndex);
-      iframeRef.current.src = urlHistory[newIndex];
+      const nextUrl = urlHistory[newIndex];
+      setCurrentUrl(nextUrl);
+      iframeRef.current.src = getProxyUrl(nextUrl);
+      setLoading(true);
     }
   }
   
   const refreshPage = () => {
     if (iframeRef.current) {
       setLoading(true);
-      iframeRef.current.src = iframeRef.current.src;
+      // Force a true refresh by recreating the src with a timestamp
+      const currentSrc = iframeRef.current.src;
+      iframeRef.current.src = currentSrc.includes('?') 
+        ? `${currentSrc}&_t=${Date.now()}` 
+        : `${currentSrc}?_t=${Date.now()}`;
     }
   }
+  
+  // Format URL for display
+  const getDisplayUrl = (url: string) => {
+    try {
+      // Extract just the hostname and first part of the path
+      const parsedUrl = new URL(url);
+      let displayPath = parsedUrl.pathname;
+      if (displayPath.length > 20) {
+        displayPath = displayPath.substring(0, 20) + '...';
+      }
+      return `${parsedUrl.hostname}${displayPath}`;
+    } catch (e) {
+      return url;
+    }
+  };
 
   return (
     <div className="fixed top-12 left-0 right-0 w-full flex flex-col" style={{ height }}>
-      {/* Custom Navigation Bar */}
-      <div className="h-8 bg-background border-b flex items-center px-2 gap-2">
+      {/* Enhanced Navigation Bar */}
+      <div className="h-8 bg-background border-b flex items-center px-2 gap-2 text-sm">
         <button 
           onClick={goBack}
           disabled={currentUrlIndex <= 0}
-          className="text-sm px-2 rounded hover:bg-gray-200 disabled:opacity-50"
+          className="px-2 rounded hover:bg-gray-200 disabled:opacity-50"
+          title="Go back"
         >
           ←
         </button>
         <button 
           onClick={goForward}
           disabled={currentUrlIndex >= urlHistory.length - 1}
-          className="text-sm px-2 rounded hover:bg-gray-200 disabled:opacity-50"
+          className="px-2 rounded hover:bg-gray-200 disabled:opacity-50"
+          title="Go forward"
         >
           →
         </button>
         <button 
           onClick={refreshPage}
-          className="text-sm px-2 rounded hover:bg-gray-200"
+          className="px-2 rounded hover:bg-gray-200"
+          title="Refresh page"
         >
           ↻
         </button>
-        <span className="flex-1 text-xs truncate text-gray-600">
-          {service} - {targetUrl}
-        </span>
-        <button 
-          onClick={() => handleRetry(true)}
-          className="text-xs px-2 py-0.5 rounded bg-blue-100 hover:bg-blue-200"
-        >
-          Bypass Mode
-        </button>
+        
+        {/* URL display */}
+        <div className="flex-1 truncate bg-gray-100 rounded px-2 py-0.5 text-xs">
+          {currentUrl ? getDisplayUrl(currentUrl) : `${service} - ${targetUrl}`}
+        </div>
+        
+        {/* Mode toggles */}
+        <div className="flex gap-1">
+          <button 
+            onClick={() => handleRetry(true)}
+            className="text-xs px-2 py-0.5 rounded bg-blue-100 hover:bg-blue-200"
+            title="Bypass HTML rewriting"
+          >
+            Bypass
+          </button>
+          <button 
+            onClick={() => {
+              if (iframeRef.current) {
+                const urlParams = new URLSearchParams(iframeRef.current.src.split('?')[1]);
+                const url = urlParams.get('url') || targetUrl;
+                window.open(url, '_blank');
+              }
+            }}
+            className="text-xs px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200"
+            title="Open in new tab"
+          >
+            Open
+          </button>
+        </div>
       </div>
       
       {/* Main Content Area */}
