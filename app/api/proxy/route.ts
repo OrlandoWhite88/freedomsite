@@ -1,121 +1,4 @@
-import { NextRequest, NextResponse }
-
-// Export handler for GET requests
-export async function GET(request: NextRequest) {
-  return handleRequest(request);
-}
-
-// Export handler for POST requests - important for forms, logins, etc.
-export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  let targetUrl = searchParams.get('url');
-  
-  if (!targetUrl) {
-    return NextResponse.redirect('https://www.google.com');
-  }
-
-  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-    targetUrl = 'https://' + targetUrl;
-  }
-
-  try {
-    const parsedUrl = new URL(targetUrl);
-    
-    // Copy headers from the original request
-    const headers = new Headers();
-    request.headers.forEach((value, key) => {
-      // Skip host header as it will be set by fetch
-      if (key.toLowerCase() !== 'host') {
-        headers.set(key, value);
-      }
-    });
-    
-    // Set additional browser-like headers
-    headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    headers.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8');
-    headers.set('Origin', `https://${parsedUrl.hostname}`);
-    headers.set('Referer', `https://${parsedUrl.hostname}`);
-    
-    // Read the request body
-    const contentType = request.headers.get('content-type');
-    let requestBody: any;
-    
-    if (contentType && contentType.includes('application/json')) {
-      requestBody = await request.json();
-    } else if (contentType && contentType.includes('application/x-www-form-urlencoded')) {
-      const formData = await request.formData();
-      requestBody = new URLSearchParams();
-      formData.forEach((value, key) => {
-        requestBody.append(key, value.toString());
-      });
-    } else if (contentType && contentType.includes('multipart/form-data')) {
-      requestBody = await request.formData();
-    } else {
-      // Try to handle as text or binary
-      try {
-        requestBody = await request.text();
-      } catch {
-        requestBody = await request.arrayBuffer();
-      }
-    }
-
-    // Forward the POST request to the target URL
-    const response = await fetch(targetUrl, {
-      method: 'POST',
-      headers,
-      body: requestBody,
-      redirect: 'follow',
-      credentials: 'include',
-    });
-
-    // Process the response
-    const responseContentType = response.headers.get('content-type') || '';
-    
-    if (!responseContentType.includes('text/html')) {
-      // For non-HTML responses, just forward the response
-      const buffer = await response.arrayBuffer();
-      
-      const responseHeaders = new Headers();
-      // Copy headers but remove security-related ones
-      response.headers.forEach((value, key) => {
-        if (!['x-frame-options', 'frame-options', 'content-security-policy'].includes(key.toLowerCase())) {
-          responseHeaders.set(key, value);
-        }
-      });
-      
-      // Add our own headers
-      responseHeaders.set('X-Proxy-Status', 'forwarded');
-      responseHeaders.set('X-Proxy-Source', targetUrl);
-      
-      return new NextResponse(buffer, {
-        status: response.status,
-        headers: responseHeaders,
-      });
-    }
-
-    // For HTML responses, we need to rewrite URLs
-    const htmlContent = await response.text();
-    
-    // Create a response URL to handle redirects
-    const finalUrl = response.url;
-    const responseUrl = new URLSearchParams();
-    responseUrl.set('url', finalUrl);
-    
-    // Create a redirect response that will go back through our proxy
-    return NextResponse.redirect(new URL(`/api/proxy?${responseUrl.toString()}`, request.url));
-  } catch (error) {
-    console.error('Proxy POST error:', error);
-    
-    return NextResponse.json(
-      {
-        error: 'Proxy POST error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        targetUrl,
-      },
-      { status: 500 }
-    );
-  }
-} from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { URL } from 'url';
 import { JSDOM } from 'jsdom';
 
@@ -633,5 +516,122 @@ async function handleRequest(request: NextRequest) {
         'X-Proxy-Error': error instanceof Error ? error.message : 'Unknown error',
       },
     });
+  }
+}
+
+// Export handler for GET requests
+export async function GET(request: NextRequest) {
+  return handleRequest(request);
+}
+
+// Export handler for POST requests - important for forms, logins, etc.
+export async function POST(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  let targetUrl = searchParams.get('url');
+  
+  if (!targetUrl) {
+    return NextResponse.redirect('https://www.google.com');
+  }
+
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    const parsedUrl = new URL(targetUrl);
+    
+    // Copy headers from the original request
+    const headers = new Headers();
+    request.headers.forEach((value, key) => {
+      // Skip host header as it will be set by fetch
+      if (key.toLowerCase() !== 'host') {
+        headers.set(key, value);
+      }
+    });
+    
+    // Set additional browser-like headers
+    headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    headers.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8');
+    headers.set('Origin', `https://${parsedUrl.hostname}`);
+    headers.set('Referer', `https://${parsedUrl.hostname}`);
+    
+    // Read the request body
+    const contentType = request.headers.get('content-type');
+    let requestBody: any;
+    
+    if (contentType && contentType.includes('application/json')) {
+      requestBody = await request.json();
+    } else if (contentType && contentType.includes('application/x-www-form-urlencoded')) {
+      const formData = await request.formData();
+      requestBody = new URLSearchParams();
+      formData.forEach((value, key) => {
+        requestBody.append(key, value.toString());
+      });
+    } else if (contentType && contentType.includes('multipart/form-data')) {
+      requestBody = await request.formData();
+    } else {
+      // Try to handle as text or binary
+      try {
+        requestBody = await request.text();
+      } catch {
+        requestBody = await request.arrayBuffer();
+      }
+    }
+
+    // Forward the POST request to the target URL
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers,
+      body: requestBody,
+      redirect: 'follow',
+      credentials: 'include',
+    });
+
+    // Process the response
+    const responseContentType = response.headers.get('content-type') || '';
+    
+    if (!responseContentType.includes('text/html')) {
+      // For non-HTML responses, just forward the response
+      const buffer = await response.arrayBuffer();
+      
+      const responseHeaders = new Headers();
+      // Copy headers but remove security-related ones
+      response.headers.forEach((value, key) => {
+        if (!['x-frame-options', 'frame-options', 'content-security-policy'].includes(key.toLowerCase())) {
+          responseHeaders.set(key, value);
+        }
+      });
+      
+      // Add our own headers
+      responseHeaders.set('X-Proxy-Status', 'forwarded');
+      responseHeaders.set('X-Proxy-Source', targetUrl);
+      
+      return new NextResponse(buffer, {
+        status: response.status,
+        headers: responseHeaders,
+      });
+    }
+
+    // For HTML responses, we need to rewrite URLs
+    const htmlContent = await response.text();
+    
+    // Create a response URL to handle redirects
+    const finalUrl = response.url;
+    const responseUrl = new URLSearchParams();
+    responseUrl.set('url', finalUrl);
+    
+    // Create a redirect response that will go back through our proxy
+    return NextResponse.redirect(new URL(`/api/proxy?${responseUrl.toString()}`, request.url));
+  } catch (error) {
+    console.error('Proxy POST error:', error);
+    
+    return NextResponse.json(
+      {
+        error: 'Proxy POST error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        targetUrl,
+      },
+      { status: 500 }
+    );
   }
 }
