@@ -6,32 +6,40 @@ interface IframeViewProps {
   service: string
 }
 
+// Service URL mapping
+const serviceUrls: Record<string, string> = {
+  "Netflix": "netflix.com",
+  "YouTube": "youtube.com",
+  "Poki": "poki.com"
+}
+
 export function IframeView({ service }: IframeViewProps) {
   const [height, setHeight] = useState("100vh")
+  const [proxyUrl, setProxyUrl] = useState("")
 
   useEffect(() => {
     const updateHeight = () => {
-      // Subtract header height (48px) from viewport height
       setHeight(`${window.innerHeight - 48}px`)
     }
 
-    // Set initial height
     updateHeight()
-
-    // Update height on window resize
     window.addEventListener("resize", updateHeight)
+    
+    const targetUrl = serviceUrls[service] || "google.com"
+    setProxyUrl(`/api/proxy?url=${encodeURIComponent(targetUrl)}`)
+    
     return () => window.removeEventListener("resize", updateHeight)
-  }, [])
+  }, [service])
 
   return (
     <div className="fixed top-12 left-0 right-0 w-full" style={{ height }}>
       <iframe
-        src="https://www.google.com"
+        src={proxyUrl}
         title={`${service} viewer`}
         className="w-full h-full border-none"
         allowFullScreen
+        sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
       />
     </div>
   )
 }
-
