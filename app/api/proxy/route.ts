@@ -80,12 +80,6 @@ async function handleProxyRequest(request: NextRequest, method: string) {
       'TE': 'trailers'
     });
     
-    // Forward cookies from the client to the target site
-    const cookieHeader = request.headers.get('cookie');
-    if (cookieHeader) {
-      headers.set('Cookie', cookieHeader);
-    }
-    
     // Prepare request options
     const fetchOptions: RequestInit = {
       method,
@@ -93,44 +87,22 @@ async function handleProxyRequest(request: NextRequest, method: string) {
       redirect: 'follow',
     };
     
-    // Handle request body for POST/PUT/PATCH
+    // Handle request body for POST/PUT/PATCH - simplified for now
     if (['POST', 'PUT', 'PATCH'].includes(method)) {
       try {
-        // Get content type from the request
-        const contentType = request.headers.get('content-type') || '';
-        
-        // Handle different types of POST data
-        if (contentType.includes('application/json')) {
-          const jsonData = await request.json();
-          fetchOptions.body = JSON.stringify(jsonData);
-        } else if (contentType.includes('application/x-www-form-urlencoded')) {
-          // Next.js handles this differently than standard fetch
-          const formText = await request.text();
-          fetchOptions.body = formText;
+        // For simplicity, just forward the text content
+        const bodyText = await request.text();
+        if (bodyText) {
+          fetchOptions.body = bodyText;
           
-          // Make sure content-type is preserved
-          headers.set('Content-Type', contentType);
-        } else if (contentType.includes('multipart/form-data')) {
-          try {
-            // For multipart/form-data, we need to get the raw body stream
-            // This is tricky in Next.js - try to use formData if possible
-            const formData = await request.formData();
-            fetchOptions.body = formData;
-          } catch (e) {
-            // If formData fails, try to get the raw body
-            const blob = await request.blob();
-            fetchOptions.body = blob;
-            
-            // Make sure content-type is forwarded with boundary
+          // Preserve content-type header if it exists
+          const contentType = request.headers.get('content-type');
+          if (contentType) {
             headers.set('Content-Type', contentType);
           }
-        } else {
-          // For other content types, pass the raw body
-          fetchOptions.body = await request.text();
         }
       } catch (e) {
         console.error('Error processing request body:', e);
-        // Continue without body if there's an error
       }
     }
     
@@ -157,29 +129,6 @@ async function handleProxyRequest(request: NextRequest, method: string) {
       'X-Proxy-Status': 'success',
       'X-Proxy-Source': targetUrl,
       'X-Frame-Options': 'SAMEORIGIN', // Override X-Frame-Options
-    });
-    
-    // Forward cookies from the target site to the client
-    // Get all 'set-cookie' headers (next.js doesn't support getAll, so we need a workaround)
-    let cookies: string[] = [];
-    
-    // Use getSetCookie if available in some Next.js environments
-    if ('getSetCookie' in fetchResponse.headers) {
-      // @ts-ignore - getSetCookie exists in some environments but not in the type definition
-      cookies = fetchResponse.headers.getSetCookie() || [];
-    } else {
-      // Fallback: get the single header (may contain multiple cookies in some implementations)
-      const setCookie = fetchResponse.headers.get('set-cookie');
-      if (setCookie) {
-        // Some implementations concatenate multiple Set-Cookie headers with commas or newlines
-        // This is a simplistic approach and may not work for all cookie formats
-        cookies = setCookie.split(/,(?=\s*\w+\s*=)/g);
-      }
-    }
-    
-    // Add each cookie to the response
-    cookies.forEach(cookie => {
-      responseHeaders.append('Set-Cookie', cookie);
     });
     
     // Copy content type
@@ -361,72 +310,68 @@ async function handleProxyRequest(request: NextRequest, method: string) {
           }
         }
 
-        // Anti-detection and navigation interception script
+        // Anti-detection script - simplified
         const interceptScript = document.createElement('script');
         interceptScript.textContent = `
           (function() {
-            // Override frame detection
+            // Prevent frame detection
             try {
-              Object.defineProperty(window, 'self', { get: function() { return window.top; } });
-              Object.defineProperty(window, 'top', { get: function() { return window; } });
-              Object.defineProperty(window, 'parent', { get: function() { return window; } });
               Object.defineProperty(window, 'frameElement', { get: function() { return null; } });
-              
-              // Disable frame-busting checks
-              window.frameElement = null;
-              window.sameOrigin = true;
-              
-              // Override security-related checks
-              window.isSecureContext = true;
             } catch(e) {
               console.warn('Frame protection override failed:', e);
             }
             
-            // Intercept form submissions
+            // Basic form submission handler
             document.addEventListener('submit', function(e) {
               const form = e.target;
               if (form && form.tagName === 'FORM') {
-                e.preventDefault();
+                const formAction = form.action || window.location.href;
                 
-                // Get form action
-                let action = form.action || window.location.href;
-                const method = (form.method || 'GET').toUpperCase();
-                
-                // Prepare form data
-                const formData = new FormData(form);
-                
-                if (method === 'GET') {
-                  // For GET, append form data to URL
-                  const url = new URL(action);
-                  for (const [key, value] of formData.entries()) {
-                    url.searchParams.append(key, value);
-                  }
-                  action = url.toString();
+                // Only intercept if not already proxied
+                if (!formAction.includes('/api/proxy')) {
+                  e.preventDefault();
                   
-                  // Navigate to the proxied URL
-                  window.location.href = '/api/proxy?url=' + encodeURIComponent(action);
-                } else {
-                  // For POST and other methods, submit via fetch
-                  fetch('/api/proxy?url=' + encodeURIComponent(action), {
-                    method: method,
-                    body: formData,
-                    headers: {
-                      'X-Requested-With': 'XMLHttpRequest'
+                  // Get method and create action URL
+                  const method = (form.method || 'GET').toUpperCase();
+                  const actionUrl = '/api/proxy?url=' + encodeURIComponent(formAction);
+                  
+                  // For GET forms, redirect with form data in URL
+                  if (method === 'GET') {
+                    const formData = new FormData(form);
+                    const params = new URLSearchParams();
+                    
+                    for (const [key, value] of formData.entries()) {
+                      params.append(key, value.toString());
                     }
-                  })
-                  .then(response => response.text())
-                  .then(html => {
-                    // Replace the current page with the response
-                    document.open();
-                    document.write(html);
-                    document.close();
-                    // Update history to make back button work
-                    history.pushState({}, '', '/api/proxy?url=' + encodeURIComponent(action));
-                  })
-                  .catch(error => {
-                    console.error('Form submission error:', error);
-                    alert('Error submitting form: ' + error.message);
-                  });
+                    
+                    let fullUrl = formAction;
+                    if (fullUrl.includes('?')) {
+                      fullUrl += '&' + params.toString();
+                    } else {
+                      fullUrl += '?' + params.toString();
+                    }
+                    
+                    window.location.href = '/api/proxy?url=' + encodeURIComponent(fullUrl);
+                  } else {
+                    // For POST forms, create a new form that posts to our proxy
+                    const newForm = document.createElement('form');
+                    newForm.method = method;
+                    newForm.action = actionUrl;
+                    
+                    // Copy all form fields
+                    const formData = new FormData(form);
+                    for (const [name, value] of formData.entries()) {
+                      const input = document.createElement('input');
+                      input.type = 'hidden';
+                      input.name = name;
+                      input.value = value.toString();
+                      newForm.appendChild(input);
+                    }
+                    
+                    // Add the form to the page and submit it
+                    document.body.appendChild(newForm);
+                    newForm.submit();
+                  }
                 }
               }
             }, true);
@@ -447,86 +392,24 @@ async function handleProxyRequest(request: NextRequest, method: string) {
                 if (!href || href.startsWith('#') || 
                     href.startsWith('javascript:') || 
                     href.startsWith('mailto:') || 
-                    href.startsWith('tel:')) {
+                    href.startsWith('tel:') ||
+                    href.includes('/api/proxy')) {
                   return;
                 }
                 
-                // Check if the link is already proxied
-                if (!href.startsWith('/api/proxy')) {
-                  e.preventDefault();
+                e.preventDefault();
+                
+                try {
+                  // Create an absolute URL
+                  const url = new URL(href, window.location.href).href;
                   
-                  try {
-                    // Create an absolute URL
-                    const baseHref = document.querySelector('base')?.getAttribute('href') || window.location.href;
-                    const absoluteUrl = new URL(href, baseHref).href;
-                    
-                    // Navigate to the proxied URL
-                    window.location.href = '/api/proxy?url=' + encodeURIComponent(absoluteUrl);
-                  } catch (error) {
-                    console.error('Error processing link:', error);
-                  }
+                  // Navigate to the proxied URL
+                  window.location.href = '/api/proxy?url=' + encodeURIComponent(url);
+                } catch (error) {
+                  console.error('Error processing link:', error);
                 }
               }
             }, true);
-            
-            // Intercept History API
-            const originalPushState = history.pushState;
-            const originalReplaceState = history.replaceState;
-            
-            history.pushState = function() {
-              const url = arguments[2];
-              if (url && typeof url === 'string' && !url.startsWith('/api/proxy')) {
-                try {
-                  const absoluteUrl = new URL(url, window.location.href).href;
-                  arguments[2] = '/api/proxy?url=' + encodeURIComponent(absoluteUrl);
-                } catch (e) {
-                  console.error('Failed to process pushState URL:', url, e);
-                }
-              }
-              return originalPushState.apply(this, arguments);
-            };
-            
-            history.replaceState = function() {
-              const url = arguments[2];
-              if (url && typeof url === 'string' && !url.startsWith('/api/proxy')) {
-                try {
-                  const absoluteUrl = new URL(url, window.location.href).href;
-                  arguments[2] = '/api/proxy?url=' + encodeURIComponent(absoluteUrl);
-                } catch (e) {
-                  console.error('Failed to process replaceState URL:', url, e);
-                }
-              }
-              return originalReplaceState.apply(this, arguments);
-            };
-            
-            // Intercept fetch and XMLHttpRequest
-            const originalFetch = window.fetch;
-            window.fetch = function(input, init) {
-              if (typeof input === 'string' && !input.startsWith('/api/proxy')) {
-                try {
-                  const absoluteUrl = new URL(input, window.location.href).href;
-                  input = '/api/proxy?url=' + encodeURIComponent(absoluteUrl);
-                } catch (e) {
-                  console.error('Failed to process fetch URL:', input, e);
-                }
-              }
-              return originalFetch.call(this, input, init);
-            };
-            
-            const originalXhrOpen = XMLHttpRequest.prototype.open;
-            XMLHttpRequest.prototype.open = function(method, url, ...args) {
-              if (typeof url === 'string' && !url.startsWith('/api/proxy')) {
-                try {
-                  const absoluteUrl = new URL(url, window.location.href).href;
-                  url = '/api/proxy?url=' + encodeURIComponent(absoluteUrl);
-                } catch (e) {
-                  console.error('Failed to process XHR URL:', url, e);
-                }
-              }
-              return originalXhrOpen.call(this, method, url, ...args);
-            };
-            
-            console.log('[Proxy] Navigation interception enabled');
           })();
         `;
         head.appendChild(interceptScript);
