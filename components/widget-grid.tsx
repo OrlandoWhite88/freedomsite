@@ -1,5 +1,6 @@
 "use client"
 
+import { useRouter } from "next/navigation"
 import { Widget } from "@/components/widget"
 
 // Define all available services with their properties
@@ -28,7 +29,14 @@ const SERVICES = [
   // You can easily add more services here
 ]
 
-export function WidgetGrid() {
+// The interface now matches what we originally had
+interface WidgetGridProps {
+  setCurrentService?: (service: string) => void
+}
+
+export function WidgetGrid({ setCurrentService }: WidgetGridProps = {}) {
+  const router = useRouter()
+  
   return (
     <div>
       <div className="mb-8 text-center">
@@ -46,7 +54,10 @@ export function WidgetGrid() {
             logo={service.logo}
             description={service.description}
             color={service.color}
-            url={service.url}
+            onClick={() => {
+              // Navigate directly to proxy
+              router.push(`/api/simple-proxy?url=${encodeURIComponent(service.url)}`)
+            }}
           />
         ))}
       </div>
