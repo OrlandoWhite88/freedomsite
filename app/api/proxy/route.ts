@@ -42,18 +42,19 @@ export async function GET(request: NextRequest) {
     const parsedUrl = new URL(targetUrl);
     
     // Create a proper HTTP/HTTPS request through the proxy
-    const proxyReq = await new Promise((resolve, reject) => {
+    const proxyResponse = await new Promise((resolve, reject) => {
       const req = http.request({
         host: proxy.host,
         port: proxy.port,
         method: 'GET',
         path: targetUrl,
-        timeout: 10000, // 10 second timeout
+        timeout: 30000, // 30 second timeout
         headers: {
           'Host': parsedUrl.host,
           'User-Agent': request.headers.get('user-agent') || 'Mozilla/5.0',
-          'Accept': '*/*',
-          'Connection': 'close'
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Connection': 'keep-alive'
         }
       });
       
@@ -70,17 +71,17 @@ export async function GET(request: NextRequest) {
       
       // Get response and read data
       req.on('response', (response) => {
-        let data = '';
+        let data = [];
         
         response.on('data', (chunk) => {
-          data += chunk;
+          data.push(chunk);
         });
         
         response.on('end', () => {
           resolve({
             statusCode: response.statusCode,
             headers: response.headers,
-            data
+            data: Buffer.concat(data)
           });
         });
       });
@@ -88,26 +89,53 @@ export async function GET(request: NextRequest) {
       req.end();
     });
     
-    // Return content from proxy
-    return new NextResponse(JSON.stringify({ 
-      message: 'Proxy request successful',
-      url: targetUrl
-    }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
+    // Type assertion to access the properties safely
+    const typedResponse = proxyResponse as { 
+      statusCode: number; 
+      headers: http.IncomingHttpHeaders;
+      data: Buffer;
+    };
+    
+    // Get the content type from the response or default to HTML
+    const contentType = typedResponse.headers['content-type'] || 'text/html';
+    
+    // Return the actual content from the proxied website
+    return new NextResponse(typedResponse.data, {
+      status: typedResponse.statusCode || 200,
+      headers: { 
+        'Content-Type': contentType
+      }
     });
     
   } catch (error) {
     console.error('Proxy error details:', error);
     
-    // Return error response with more details
-    return new NextResponse(JSON.stringify({
-      error: 'Proxy request failed',
-      message: error instanceof Error ? error.message : 'Unknown error',
-      url: targetUrl
-    }), { 
+    // Return an HTML error page that can be displayed in the iframe
+    const errorHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Proxy Error</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+            .error-container { max-width: 600px; margin: 50px auto; }
+            h1 { color: #e74c3c; }
+          </style>
+        </head>
+        <body>
+          <div class="error-container">
+            <h1>Proxy Connection Error</h1>
+            <p>Sorry, we couldn't connect to the requested website through our proxy.</p>
+            <p>Error: ${error instanceof Error ? error.message : 'Unknown error'}</p>
+            <p>Please try again or select a different service.</p>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    return new NextResponse(errorHtml, { 
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'text/html' }
     });
   }
 }
